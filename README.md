@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="header.png" alt="Abraxas Labs — gitea-follow-existence" width="100%">
+  <img src="header.png" alt="Abraxas Labs - gitea-follow-existence" width="100%">
 </p>
 
 <p align="center">
@@ -14,147 +14,65 @@
 
 # gitea-follow-existence
 
-**Gitea** `1.27.3` — Gitea
+**Gitea** `1.27.3` - Gitea
 
-Unpublished Gitea source finding: Follow 204 vs 404 existence oracle for hidden users.
+[`GetInfo`](https://github.com/go-gitea/gitea/blob/v1.27.3/routers/api/v1/user/user.go) already 404s hidden users and lies about why: `fake ErrUserNotExist error message to not leak information about existence`. [`PUT /user/following/{username}`](https://github.com/go-gitea/gitea/blob/v1.27.3/routers/api/v1/api.go) loads the target with `UserAssignmentAPI()` and calls [`Follow`](https://github.com/go-gitea/gitea/blob/v1.27.3/routers/api/v1/user/follower.go). No `IsUserVisibleToViewer`. Missing name: 404 `user redirect does not exist`. Hidden name that exists: **204**.
+
+**204 means the account exists. 404 means you guessed a name that is not there. The profile JSON stays closed.**
 
 | | |
 |---|---|
-| ID | Unpublished Gitea source finding #6 (no CVE yet) |
+| ID | no CVE yet |
 | CWE | [CWE-203](https://cwe.mitre.org/data/definitions/203.html) |
 | CVSS | **Medium: 4.3** `CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N` |
 | Product | [Gitea](https://github.com/go-gitea/gitea) |
-| Affected | all versions **through 1.27.3** (inclusive) |
-| Patched | vendor patch — see references |
-| Auth | authenticated (see source map) |
+| Affected | through **v1.27.3** (`146cc3e`) |
+| Auth | signed-in account |
 | License | [GNU Affero GPL v3.0](LICENSE) |
-| Lab | `127.0.0.1` only · vendor/client disclosure pack, not a scanner |
+| Lab | `127.0.0.1` only |
 
----
+## What an attacker can do
 
-## Advisory (from the source map)
+Sign in (default open registration is cheap). Prove a hidden or limited account **exists** even when the profile API 404s. No profile dump. No private git. Combined with [unauth stargazers](https://github.com/abraxas/gitea-stargazers-hidden), you can find a hidden login on a public repo and then confirm it still exists after they hide the profile.
 
-PUT /api/v1/user/following/{username} Follow skips IsUserVisibleToViewer. GET /users/{username} already applies the visibility check.
+Check and Unfollow sit on the same group. Same missing check.
 
----
+## How I found it
 
-## Entry
+Same visibility pass as [stargazers](https://github.com/abraxas/gitea-stargazers-hidden). When a handler works that hard to lie, you look at every other route that takes `{username}`. Follow does not.
 
-- **Method:** `PUT`
-- **Path:** `/api/v1/user/following/{username}`
-- **Router:** Authenticated Follow. User assignment 404s only when the name is missing. IsUserVisibleToViewer is not called. GET /users/{username} already 404s hidden users.
-- **Notes:** Authenticated unpublished Gitea #6 CWE-203 v1.27.3. Witness: Follow hiddenlimited 204 vs unknown 404 while GET  is 404. Not eval. Not a reverse shell. Not a profile read.
+I registered a restricted attacker, followed the hidden name, followed a name that does not exist, and compared status codes. Public users are supposed to 204. That is not SUCCESS. Hidden 204 vs unknown 404 while GET is 404 is SUCCESS.
 
-### Call chain
+Wrong turns already recorded: Follow hidden returning 404 (then visibility is on this route); profile JSON for the hidden user (`GetInfo` already 404s - this bug is status class, not a dump); treating Follow 204 on a public user as SUCCESS; a reverse shell. Theatre.
 
-- `GET /api/v1/users/hiddenlimited as restricted attacker → 404`
-- `PUT /api/v1/user/following/hiddenlimited → 204`
-- `PUT /api/v1/user/following/no-such-user-xyz → 404`
-
-### Lab preconditions
-
-- Gitea 1.27.3
-- Authenticated account
-- A limited/hidden user on the instance
-
-### Witness
-
-Follow hiddenlimited is 204; unknown name is 404; GET  is 404
-
-### Not success
-
-- eval/base64/system payload
-- reverse shell
-- profile JSON for the hidden user
-- Follow hidden user returning 404
-
----
-
-## Patch / remediation
-
-**Do this first:** Apply the vendor patch for **Gitea**. See references.
-
-**Verify after upgrade**
-
-- Re-run `gitea-follow-existence-Abraxas-Labs.py` against the patched build: the mapped witness must **not** appear.
-- Confirm the vendor advisory / changeset in the deployed tree (see references).
-- A WAF signature is delay, not a patch.
-
-**If you cannot update immediately**
-
-- Disable or isolate the affected component.
-- Hunt for the witness condition on production (new privileged users, unexpected files, injected rows — whatever this CVE's map names).
-
----
-
-## Reproduction (authorized lab)
-
-Target **only** `http://127.0.0.1:8088` (or the loopback you bound). Do not point this script at the internet.
-
-```bash
-python3 gitea-follow-existence-Abraxas-Labs.py
-```
-
-Success is the **witness** above in the response body. Generic 200 HTML is not it.
-
----
-
-## Lab images
-
-Loopback stack used to reproduce. Official images unless a `Dockerfile` in this folder builds from source.
-
-- [`lab/docker-compose.yml`](lab/docker-compose.yml)
-- [`lab/Dockerfile`](lab/Dockerfile)
-- [`lab/run.sh`](lab/run.sh)
+## Lab
 
 ```bash
 cd lab
-docker compose up --force-recreate
+./run.sh
 ```
 
-Bind the vulnerable product tree next to Compose if the YAML mounts a local directory (plugin zip / source tag from the version table). Publish nothing except `127.0.0.1`.
+Target **only** `http://127.0.0.1:18134`. Compose allows `public,limited,private` visibility.
 
----
+```text
+get-hidden status=404
+follow-hidden status=204
+follow-unknown status=404 user redirect does not exist
+oracle hidden=204 unknown=404
+SUCCESS GITEA-FOLLOW-ORACLE
+```
+
+## The fix
+
+Call `IsUserVisibleToViewer` in `Follow` (and Check/Unfollow) before `FollowUser`. Hidden names must 404 the same way `GetInfo` already does.
 
 ## References
 
-- [github.com/go-gitea/gitea](https://github.com/go-gitea/gitea) tag v1.27.3
-
-- Abraxas Labs: [abraxaslabs.tech](https://abraxaslabs.tech) · [github.com/abraxas](https://github.com/abraxas) · [@abraxas_null](https://x.com/abraxas_null)
-
----
-
-## Records (structured)
-
-```
-# Gitea unpublished #6 — Follow existence oracle
-
-CWE: CWE-203
-Severity: Medium (source review)
-
-## Description
-
-`PUT /api/v1/user/following/{username}` skips `IsUserVisibleToViewer`. A restricted attacker gets 404 on the hidden profile and 204 on Follow when the account exists. Unknown names 404 `user redirect does not exist`.
-
-## Product
-
-Gitea 1.27.3. Lab oracle is status-class only, not a profile read or a shell.
-```
-
----
+- [github.com/go-gitea/gitea](https://github.com/go-gitea/gitea) tag [v1.27.3](https://github.com/go-gitea/gitea/releases/tag/v1.27.3)
+- [`follower.go`](https://github.com/go-gitea/gitea/blob/v1.27.3/routers/api/v1/user/follower.go) · [`api.go` following group](https://github.com/go-gitea/gitea/blob/v1.27.3/routers/api/v1/api.go) · [`GetInfo`](https://github.com/go-gitea/gitea/blob/v1.27.3/routers/api/v1/user/user.go)
+- Same tag: [gitea-stargazers-hidden](https://github.com/abraxas/gitea-stargazers-hidden)
+- [CWE-203](https://cwe.mitre.org/data/definitions/203.html)
 
 ## License
 
-This disclosure pack is licensed under the **GNU Affero General Public License v3.0**. See [LICENSE](LICENSE).
-
----
-
-## Disclaimer
-
-This pack is for **the vendor, the site owner, and licensed labs**. The script talks to `127.0.0.1`. Using it against systems you do not own is not authorized by Abraxas Labs. No warranty.
-
-<p align="center">
-  <a href="https://abraxaslabs.tech">abraxaslabs.tech</a> ·
-  <a href="https://github.com/abraxas">github.com/abraxas</a> ·
-  <a href="https://x.com/abraxas_null">@abraxas_null</a>
-</p>
+GNU Affero GPL v3.0. See [LICENSE](LICENSE). Loopback lab only. No warranty.
