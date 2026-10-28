@@ -13,6 +13,10 @@
   &nbsp;·&nbsp;
   <a href="https://github.com/abraxas/gitea-follow-existence">gitea-follow-existence</a>
 </p>
+<p align="center">
+  Write-up: <a href="https://abraxaslabs.tech/research/gitea-follow-existence"><strong>https://abraxaslabs.tech/research/gitea-follow-existence</strong></a>
+</p>
+
 
 # gitea-follow-existence
 
